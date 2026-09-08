@@ -27,3 +27,66 @@ jobs:
       - name: Run AI Agent
         run: |
           python agent.py
+
+      - name: Get Shopify access token
+        env:
+          SHOPIFY_CLIENT_ID: ${{ secrets.SHOPIFY_CLIENT_ID }}
+          SHOPIFY_CLIENT_SECRET: ${{ secrets.SHOPIFY_CLIENT_SECRET }}
+          SHOPIFY_STORE_DOMAIN: ${{ secrets.SHOPIFY_STORE_DOMAIN }}
+        run: |
+          SHOP="${SHOPIFY_STORE_DOMAIN%.myshopify.com}"
+
+          RESPONSE=$(curl -sS -X POST \
+            "https://${SHOP}.myshopify.com/admin/oauth/access_token" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "grant_type=client_credentials" \
+            -d "client_id=${SHOPIFY_CLIENT_ID}" \
+            -d "client_secret=${SHOPIFY_CLIENT_SECRET}")
+
+          echo "$RESPONSE" > shopify_token.json
+
+          python - <<'PY'
+          import json
+
+          with open("shopify_token.json", "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          if "access_token" not in data:
+              print("Shopify authentication failed.")
+              print(data)
+              raise SystemExit(1)
+
+          print("Shopify authentication successful.")
+          PY
+
+      - name: Test Shopify Admin API
+        env:
+          SHOPIFY_STORE_DOMAIN: ${{ secrets.SHOPIFY_STORE_DOMAIN }}
+        run: |
+          SHOP="${SHOPIFY_STORE_DOMAIN%.myshopify.com}"
+
+          TOKEN=$(python -c "import json; print(json.load(open('shopify_token.json'))['access_token'])")
+
+          RESPONSE=$(curl -sS \
+            "https://${SHOP}.myshopify.com/admin/api/2026-07/graphql.json" \
+            -H "Content-Type: application/json" \
+            -H "X-Shopify-Access-Token: ${TOKEN}" \
+            -d '{"query":"{ shop { name myshopifyDomain } }"}')
+
+          echo "$RESPONSE"
+
+          python - <<'PY'
+          import json
+
+          with open("shopify_token.json", "r", encoding="utf-8") as f:
+              token_data = json.load(f)
+
+          # The API response is passed through an environment-safe check below.
+          PY
+
+          if echo "$RESPONSE" | grep -q '"shop"'; then
+            echo "Shopify Admin API connection successful."
+          else
+            echo "Shopify Admin API connection failed."
+            exit 1
+          fi
